@@ -1,26 +1,35 @@
 import uvicorn
 import os
+import threading
 import google.generativeai as genai
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List
-from contextlib import asynccontextmanager
 import search_engine
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "PASTE_YOUR_REAL_KEY_HERE_FOR_LOCAL")
 
 recommender = None
+is_loading = False
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global recommender
+app = FastAPI(title="SHL Assessment Recommender API")
+
+def load_engine_background():
+    global recommender, is_loading
+    is_loading = True
     try:
         recommender = search_engine.AssessmentRecommender()
+        print("Engine Loaded Successfully")
     except Exception as e:
-        print(f"Lifespan Error: {e}")
-    yield
+        print(f"Engine Load Error: {e}")
+    finally:
+        is_loading = False
 
-app = FastAPI(title="SHL Assessment Recommender API", lifespan=lifespan)
+@app.on_event("startup")
+async def startup_event():
+    thread = threading.Thread(target=load_engine_background)
+    thread.daemon = True
+    thread.start()
 
 try:
     genai.configure(api_key=GEMINI_API_KEY)
@@ -77,14 +86,24 @@ def balance_results(tech_results, beh_results, total_needed=10):
             if b['url'] not in [x['url'] for x in final_mix]: final_mix.append(b)
     return final_mix
 
+@app.get("/")
+def root():
+    status = "loaded" if recommender else "loading"
+    return {"message": "SHL Recommender API is running", "status": status}
+
 @app.get("/health")
 def health_check():
-    return {"status": "healthy", "engine_loaded": recommender is not None}
+    if recommender is None:
+        return {"status": "loading"}
+    return {"status": "healthy", "engine_loaded": True}
 
 @app.post("/recommend", response_model=RecommendResponse)
 def get_recommendations(request: QueryRequest):
     if recommender is None:
-        raise HTTPException(status_code=503, detail="Server is starting up. Try again in 30 seconds.")
+        if is_loading:
+            raise HTTPException(status_code=503, detail="Server is warming up. Please try again in 30 seconds.")
+        else:
+            raise HTTPException(status_code=500, detail="Search Engine failed to load.")
 
     try:
         safe_limit = max(1, min(request.limit, 10))
@@ -111,4 +130,4 @@ def get_recommendations(request: QueryRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
