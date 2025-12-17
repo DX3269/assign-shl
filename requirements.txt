@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+streamlit
+google-generativeai
+langchain-community
+langchain-huggingface
+faiss-cpu
+sentence-transformers
+numpy
+pandas
+openpyxl
+requests
+pydantic
